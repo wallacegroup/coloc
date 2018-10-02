@@ -4,8 +4,8 @@
 \alias{pcs.model}
 \title{pcs.model}
 \usage{
-pcs.model(object, group, Y, threshold = 0.8, family = if (all(Y \%in\% c(0,
-  1))) {     "binomial" } else {     "gaussian" })
+pcs.model(object, group, Y, stratum = NULL, threshold = 0.8, family = if
+  (all(Y \%in\% c(0, 1))) {     "binomial" } else {     "gaussian" })
 }
 \arguments{
 \item{object}{A colocPCs object, result of \code{pcs.prepare()}.}
@@ -15,6 +15,8 @@ principal components matrix}
 
 \item{Y}{Numeric phenotype vector, length equal to the number of samples from
 the requested group}
+
+\item{stratum}{optional vector that gives stratum information}
 
 \item{threshold}{The minimum number of principal components which captures at
 least threshold proportion of the variance will be selected.  Simulations
@@ -56,12 +58,14 @@ set.seed(1)
  m1 <- pcs.model(pcs, group=1, Y=Y1)
  m2 <- pcs.model(pcs, group=2, Y=Y2)
 
+ ## Alternatively, if one (or both) datasets have a known stratification, here simulated as
+ S <- rbinom(500,1,0.5)
+ ## specify this in pcs.model as
+ m1 <- pcs.model(pcs, group=1, Y=Y1, stratum=S)
+
  ## test colocalisation using PCs
  coloc.test(m1,m2,plot.coeff=FALSE,bayes=FALSE)
 
-}
-\author{
-Chris Wallace
 }
 \references{
 Wallace et al (2012).  Statistical colocalisation of monocyte
@@ -73,4 +77,6 @@ association signals for type 1 diabetes and RPS26 gene expression on
 chromosome 12q13. Biostatistics 10:327-34.
 \url{http://www.ncbi.nlm.nih.gov/pubmed/19039033}
 }
-
+\author{
+Chris Wallace
+}

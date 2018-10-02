@@ -1,4 +1,4 @@
-##' variance of MLE of beta for quantitative trait, assuming var(y)=0
+##' variance of MLE of beta for quantitative trait, assuming var(y)=1
 ##'
 ##' Internal function
 ##' @title Var.data
@@ -142,10 +142,14 @@ combine.abf <- function(l1, l2, p1, p2, p12) {
 ##' 
 ##' @author Chris Wallace
 sdY.est <- function(vbeta, maf, n) {
-  oneover <- 1/vbeta
-  nvx <- 2 * n * maf * (1-maf)
-  m <- lm(nvx ~ oneover)
-  return(sqrt(coef(m)[['oneover']]))
+    warning("estimating sdY from maf and varbeta, please directly supply sdY if known")
+    oneover <- 1/vbeta
+    nvx <- 2 * n * maf * (1-maf)
+    m <- lm(nvx ~ oneover - 1)
+    cf <- coef(m)[['oneover']]
+    if(cf < 0)
+        stop("estimated sdY is negative - this can happen with small datasets, or those with errors.  A reasonable estimate of sdY is required to continue.")
+    return(sqrt(cf))
 }
 
 ##' Internal function, process each dataset list for coloc.abf
@@ -156,7 +160,7 @@ sdY.est <- function(vbeta, maf, n) {
 ##' @return data.frame with log(abf) or log(bf)
 ##' @author Chris Wallace
 process.dataset <- function(d, suffix) {
-  message('Processing dataset')
+  #message('Processing dataset')
 
   nd <- names(d)
   if (! 'type' %in% nd)
@@ -164,20 +168,22 @@ process.dataset <- function(d, suffix) {
 
   if(!(d$type %in% c("quant","cc")))
       stop("dataset ",suffix,": ","type must be quant or cc")
+  
   if(d$type=="cc") {
       if(! "s" %in% nd)
           stop("dataset ",suffix,": ","please give s, proportion of samples who are cases")
-      if(! "MAF" %in% nd)
-          stop("dataset ",suffix,": ","please give MAF for type cc")
+      if("pvalues" %in% nd && !( "MAF" %in% nd))
+          stop("dataset ",suffix,": ","please give MAF if using p values")
       if(d$s<=0 || d$s>=1)
           stop("dataset ",suffix,": ","s must be between 0 and 1")
   }
+  
   if(d$type=="quant") {
-      if(!("MAF" %in% nd || "sdY" %in% nd))
-          stop("dataset ",suffix,": ","must give MAF or sdY for type quant")
+      if(!("sdY" %in% nd || ("MAF" %in% nd && "N" %in% nd )))
+          stop("dataset ",suffix,": ","must give sdY for type quant, or, if sdY unknown, MAF and N so it can be estimated")
   }
   
-  if("beta" %in% nd && "varbeta" %in% nd && ("MAF" %in% nd || "sdY" %in% nd)) {
+  if("beta" %in% nd && "varbeta" %in% nd) {  ## use beta/varbeta.  sdY should be estimated by now for quant
     if(length(d$beta) != length(d$varbeta))
       stop("dataset ",suffix,": ","Length of the beta vectors and variance vectors must match")
     if(!("snp" %in% nd))
@@ -185,20 +191,17 @@ process.dataset <- function(d, suffix) {
     if(length(d$snp) != length(d$beta))
       stop("dataset ",suffix,": ","Length of snp names and beta vectors must match")
  
-    if(d$type == 'quant' & !('sdY' %in% nd)) 
-      d$sdY <- sdY.est(d$varbeta, d$MAF, d$N)
-    
-    df <- approx.bf.estimates(z=d$beta/sqrt(d$varbeta),
+    if(d$type=="quant" && !('sdY' %in% nd)) 
+          d$sdY <- sdY.est(d$varbeta, d$MAF, d$N)
+   df <- approx.bf.estimates(z=d$beta/sqrt(d$varbeta),
                               V=d$varbeta, type=d$type, suffix=suffix, sdY=d$sdY)
     df$snp <- as.character(d$snp)
     return(df)
   }
 
-  if("pvalues" %in% nd & "MAF" %in% nd & "N" %in% nd) {
+  if("pvalues" %in% nd & "MAF" %in% nd & "N" %in% nd) { ## no beta/varbeta: use p value / MAF approximation
     if (length(d$pvalues) != length(d$MAF))
       stop('Length of the P-value vectors and MAF vector must match')
-    if(d$type=="cc" & !("s" %in% nd))
-      stop("Must specify s if type=='cc' and you want to use approximate Bayes Factors")
     if(!("snp" %in% nd))
       d$snp <- sprintf("SNP.%s",1:length(d$pvalues))
     df <- data.frame(pvalues = d$pvalues,
@@ -213,6 +216,88 @@ process.dataset <- function(d, suffix) {
 
   stop("Must give, as a minimum, one of:\n(beta, varbeta, type, sdY)\n(beta, varbeta, type, MAF)\n(pvalues, MAF, N, type)")
 }
+
+##' Bayesian finemapping analysis
+##'
+##' This function calculates posterior probabilities of different
+##' causal variant for a single trait.
+##'
+##' If regression coefficients and variances are available, it
+##' calculates Bayes factors for association at each SNP.  If only p
+##' values are available, it uses an approximation that depends on the
+##' SNP's MAF and ignores any uncertainty in imputation.  Regression
+##' coefficients should be used if available.
+##' 
+##' @title Bayesian finemapping analysis
+##' @param dataset a list with the following elements
+##' \describe{
+##' 
+##'   \item{pvalues}{P-values for each SNP in dataset 1}
+##'
+##'   \item{N}{Number of samples in dataset 1}
+##'
+##'   \item{MAF}{minor allele frequency of the variants}
+##'
+##' \item{beta}{regression coefficient for each SNP from dataset 1}
+##' 
+##' \item{varbeta}{variance of beta}
+##' 
+##' \item{type}{the type of data in dataset 1 - either "quant" or "cc" to denote quantitative or case-control}
+##'
+##' \item{s}{for a case control dataset, the proportion of samples in dataset 1 that are cases}
+##'
+##'  \item{sdY}{for a quantitative trait, the population standard deviation of the trait.  if not given, it can be estimated from the vectors of varbeta and MAF}
+##' 
+##' \item{snp}{a character vector of snp ids, optional. If present, it will be used to merge dataset1 and dataset2.  Otherwise, the function assumes dataset1 and dataset2 contain results for the same SNPs in the same order.}
+##'
+##' }
+##'
+##' Some of these items may be missing, but you must give
+##' \itemize{
+##' \item{always}{\code{type}}
+##' \item{if \code{type}=="cc"}{\code{s}}
+##' \item{if \code{type}=="quant" and \code{sdY} known}{\code{sdY}}
+##' \item{if \code{type}=="quant" and \code{sdY} unknown}{\code{beta}, \code{varbeta}, \code{N}, \code{MAF}}
+##' and then either
+##' \item{}{\code{pvalues}, \code{MAF}}
+##' \item{}{\code{beta}, \code{varbeta}}
+##' }
+##' 
+##'
+##' @param p1 prior probability a SNP is associated with the trait 1, default 1e-4
+##' @return a \code{data.frame}:
+##' \itemize{
+##' \item an annotated version of the input data containing log Approximate Bayes Factors and intermediate calculations, and the posterior probability of the SNP being causal
+##' }
+##' @author Chris Wallace
+##' @export
+finemap.abf <- function(dataset, p1=1e-4) {
+
+  if(!is.list(dataset))
+    stop("dataset must be a list.")
+  
+    df <- process.dataset(d=dataset, suffix="")
+    nsnps <- nrow(df)
+  dfnull <- df[1,]
+    for(nm in colnames(df))
+        dfnull[,nm] <- NA
+    dfnull[,"snp"] <- "null"
+    dfnull[,"lABF."] <- 1
+    df <- rbind(df,dfnull)
+                ## data.frame("V."=NA,
+                ##            z.=NA,
+                ##            r.=NA,
+                ##            lABF.=1,
+                ##            snp="null"))
+    df$prior <- c(rep(p1,nsnps),1-nsnps*p1)
+
+  ## add SNP.PP.H4 - post prob that each SNP is THE causal variant for a shared signal
+  my.denom.log.abf <- logsum(df$lABF + df$prior)
+  df$SNP.PP <- exp(df$lABF - my.denom.log.abf)
+ 
+  return(df)
+}
+
 
 ##' Bayesian colocalisation analysis
 ##'
